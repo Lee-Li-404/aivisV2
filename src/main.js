@@ -9,6 +9,7 @@ import {
   rotate180Reverse,
 } from "./rotationUtils.js";
 import gsap from "gsap";
+import { GUI } from "dat.gui";
 
 // === Setup scene ===
 const scene = new THREE.Scene();
@@ -46,6 +47,37 @@ const gl = renderer.getContext();
 const pixel = new Uint8Array(4);
 gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixel);
 
+const gui = new GUI();
+
+//参数对象
+const params = {
+  rotationEnabled: true,
+  reverseEnabled: true,
+  backgroundColor: "#fff2e5", // 用字符串给 GUI 绑定
+  maxAmp: 10,
+};
+
+const guiRotation = gui
+  .add(params, "rotationEnabled")
+  .name("回答时转动？")
+  .onChange((value) => {
+    if (!value) {
+      params.reverseEnabled = false;
+      guiReverse.updateDisplay();
+    }
+  });
+
+const guiReverse = gui.add(params, "reverseEnabled").name("断句变转动方向？");
+const guiAmp = gui.add(params, "maxAmp").name("回答缩放幅度");
+
+// 背景颜色调色盘
+gui
+  .addColor(params, "backgroundColor")
+  .name("背景颜色")
+  .onChange((value) => {
+    scene.background = new THREE.Color(value); // 每次改都生成新的 Color
+  });
+
 //加入声波RMS
 let useMicRMS = true; // 改成用麦克风输入做 RMS
 let useRemoteRMS = false;
@@ -57,7 +89,7 @@ let lastMotionScale = 1; // 初始幅度，设你动效一开始的缩放即可
 let phase = 0;
 
 let silentFrameCount = 0;
-const SILENT_RMS_THRESHOLD = 0.00195;
+const SILENT_RMS_THRESHOLD = 0.0024;
 const SILENT_RMS_THRESHOLD_UP = 0.01;
 const SILENT_FRAME_LIMIT = 4;
 let isInSilentPhase = false;
@@ -331,7 +363,7 @@ function animate() {
     isColoring = false;
   }
 
-  if (doRotation && !isRotating) {
+  if (doRotation && !isRotating && params.rotationEnabled) {
     if (normalDir == true) {
       if (reversed == true) {
         const { newSequence, newIndex } = reorderFaceSequence(
@@ -545,10 +577,10 @@ function animate() {
   if (isBreathing) {
     let targetSpeed;
     let norm = 0;
-    let maxAmplitude = 10; // 默认值，后面根据输入类型动态设定
+    let maxAmplitude = params.maxAmp; // 默认值，后面根据输入类型动态设定
 
     if (useMicRMS) {
-      maxAmplitude = 5;
+      maxAmplitude = 3;
       const micAmp = getMicAmplitude(); // 已经 sqrt(mean square)
       const micRms = micAmp / 128;
       lastSmoothRms = lastSmoothRms * 0.7 + micRms * 0.3;
@@ -569,7 +601,7 @@ function animate() {
         sum += audioDataArray[i] * audioDataArray[i];
       }
       let currRms = Math.sqrt(sum / audioDataArray.length);
-      if (!isInSilentPhase) {
+      if (!isInSilentPhase && params.reverseEnabled) {
         if (currRms < SILENT_RMS_THRESHOLD) {
           silentFrameCount += 1;
 
@@ -577,14 +609,15 @@ function animate() {
             console.log("📍 Detected sentence boundary.");
             console.log(reverseCounter);
             if (isRotating) {
-              if (!getReversingMidway() && reverseCounter >= 3) {
+              if (!getReversingMidway() && reverseCounter >= 2) {
+                reverseCounter = 0;
+
                 setTimeout(() => {
-                  console.log("reversed!!!⚠️");
                   setShouldReverseMidway(true);
+                  console.log("reversed!!!⚠️");
                   normalDir = !normalDir;
                   reversed = true;
-                  reverseCounter = 0;
-                }, 30);
+                }, 400);
               }
             }
             // } else {
@@ -614,10 +647,10 @@ function animate() {
         targetSpeed = lastSpeed + 0.012 * Math.sign(targetSpeed - lastSpeed);
       }
       setStep(Math.max(40, Math.abs(0.31 - targetSpeed) * 700));
-      maxAmplitude = 9; // 💡 useRemoteRMS 时最大伸缩幅度为 9
+      maxAmplitude = params.maxAmp; // 💡 useRemoteRMS 时最大伸缩幅度为 9
     } else {
       targetSpeed = 0.018;
-      maxAmplitude = 10;
+      maxAmplitude = params.maxAmp;
     }
 
     // 5. 平滑speed
