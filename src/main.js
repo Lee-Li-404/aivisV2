@@ -55,6 +55,9 @@ const params = {
   reverseEnabled: true,
   backgroundColor: "#fff2e5", // 用字符串给 GUI 绑定
   maxAmp: 10,
+  reverseFreqLimit: 3,
+  SILENT_RMS_THRESHOLD: 0.0024,
+  SILENT_FRAME_LIMIT: 4,
 };
 
 const guiRotation = gui
@@ -69,6 +72,9 @@ const guiRotation = gui
 
 const guiReverse = gui.add(params, "reverseEnabled").name("断句变转动方向？");
 const guiAmp = gui.add(params, "maxAmp").name("回答缩放幅度");
+gui.add(params, "reverseFreqLimit").name("反转频率（转）").step(1);
+gui.add(params, "SILENT_RMS_THRESHOLD").name("断句识别 （音量）");
+gui.add(params, "SILENT_FRAME_LIMIT").name("断句识别（时长）").step(1);
 
 // 背景颜色调色盘
 gui
@@ -89,9 +95,7 @@ let lastMotionScale = 1; // 初始幅度，设你动效一开始的缩放即可
 let phase = 0;
 
 let silentFrameCount = 0;
-const SILENT_RMS_THRESHOLD = 0.0024;
 const SILENT_RMS_THRESHOLD_UP = 0.01;
-const SILENT_FRAME_LIMIT = 4;
 let isInSilentPhase = false;
 
 // === main.js ===
@@ -602,14 +606,17 @@ function animate() {
       }
       let currRms = Math.sqrt(sum / audioDataArray.length);
       if (!isInSilentPhase && params.reverseEnabled) {
-        if (currRms < SILENT_RMS_THRESHOLD) {
+        if (currRms < params.SILENT_RMS_THRESHOLD) {
           silentFrameCount += 1;
 
-          if (silentFrameCount >= SILENT_FRAME_LIMIT) {
+          if (silentFrameCount >= params.SILENT_FRAME_LIMIT) {
             console.log("📍 Detected sentence boundary.");
             console.log(reverseCounter);
             if (isRotating) {
-              if (!getReversingMidway() && reverseCounter >= 2) {
+              if (
+                !getReversingMidway() &&
+                reverseCounter >= params.reverseFreqLimit
+              ) {
                 reverseCounter = 0;
 
                 setTimeout(() => {
