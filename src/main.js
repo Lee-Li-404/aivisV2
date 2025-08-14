@@ -2,12 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { groupings } from "./groupings.js";
 import { gradientPresets } from "./gradients.js";
-import {
-  rotate180,
-  getGroupOriginalCenter,
-  setStep,
-  rotate180Reverse,
-} from "./rotationUtils.js";
+import { rotate180, getGroupOriginalCenter, setStep } from "./rotationUtils.js";
 import gsap from "gsap";
 import { GUI } from "dat.gui";
 
@@ -55,7 +50,7 @@ const params = {
   reverseEnabled: true,
   backgroundColor: "#fff2e5", // 用字符串给 GUI 绑定
   maxAmp: 10,
-  reverseFreqLimit: 3,
+  reverseFreqLimit: 1,
   SILENT_RMS_THRESHOLD: 0.0024,
   SILENT_FRAME_LIMIT: 4,
 };
@@ -103,7 +98,15 @@ let isInSilentPhase = false;
 let shouldReverseMidway = false;
 let reversingMidway = false;
 
-let reverseCounter = 1;
+let reverseCounter = 0;
+
+export function incrementReverseCounter() {
+  reverseCounter++;
+}
+
+export function getReverseCounter() {
+  return reverseCounter;
+}
 
 export function setShouldReverseMidway(val) {
   shouldReverseMidway = val;
@@ -120,8 +123,6 @@ export function setReversingMidway(val) {
 export function getReversingMidway() {
   return reversingMidway;
 }
-
-let normalDir = true;
 
 let doRotation = false;
 
@@ -347,6 +348,12 @@ window.addEventListener("keydown", (e) => {
     backToOriginalCenterColor = !backToOriginalCenterColor;
   } else if (e.code === "KeyS") {
     useMicRMS = !useMicRMS;
+  } else if (e.code === "KeyR") {
+    setShouldReverseMidway(true);
+    faceIndex = (faceIndex + 1) % faceSequence.length;
+    doRotation = true;
+  } else if (e.code === "KeyT") {
+    doRotation = false;
   }
 });
 
@@ -368,94 +375,24 @@ function animate() {
   }
 
   if (doRotation && !isRotating && params.rotationEnabled) {
-    if (normalDir == true) {
-      if (reversed == true) {
-        const { newSequence, newIndex } = reorderFaceSequence(
-          faceSequence,
-          faceIndex
-        );
-        faceSequence = newSequence;
-        faceIndex = newIndex;
-        reversed = !reversed;
-        const face = faceSequence[faceIndex];
-        console.log("one");
-        console.log(face);
-        isRotating = true;
-        rotate180(
-          face,
-          groupArray,
-          groupDirectionArray,
-          getGroupCenter,
-          sceneCenter,
-          () => {
-            isRotating = false;
-            reverseCounter += 1;
-          }
-        );
-      } else {
-        faceIndex = (faceIndex + 1) % faceSequence.length;
-        const face = faceSequence[faceIndex];
-        console.log("two");
-        console.log(face);
-        isRotating = true;
-        rotate180(
-          face,
-          groupArray,
-          groupDirectionArray,
-          getGroupCenter,
-          sceneCenter,
-          () => {
-            isRotating = false;
-            reverseCounter += 1;
-          }
-        );
+    const face = faceSequence[faceIndex];
+    // console.log(face);
+    isRotating = true;
+    rotate180(
+      face,
+      groupArray,
+      groupDirectionArray,
+      getGroupCenter,
+      sceneCenter,
+      () => {
+        isRotating = false;
       }
-    } else {
-      if (reversed == true) {
-        const { newSequence, newIndex } = reorderFaceSequence(
-          faceSequence,
-          faceIndex
-        );
-        faceSequence = newSequence;
-        faceIndex = newIndex;
-        reversed = !reversed;
-        const face = faceSequence[faceIndex];
-        console.log("three");
-        console.log(face);
-
-        isRotating = true;
-        rotate180Reverse(
-          face,
-          groupArray,
-          groupDirectionArray,
-          getGroupCenter,
-          sceneCenter,
-          () => {
-            isRotating = false;
-            reverseCounter += 1;
-          }
-        );
-      } else {
-        faceIndex = (faceIndex + 1) % faceSequence.length;
-        const face = faceSequence[faceIndex];
-        console.log("four");
-        console.log(face);
-
-        isRotating = true;
-        rotate180Reverse(
-          face,
-          groupArray,
-          groupDirectionArray,
-          getGroupCenter,
-          sceneCenter,
-          () => {
-            isRotating = false;
-            reverseCounter += 1;
-          }
-        );
-      }
-    }
+    );
   }
+  if (doRotation == false) {
+    setShouldReverseMidway(true);
+  }
+
   // === 状态判断：是否进入活跃模式（声音触发）===
   if (rawAmp > AMP_THRESHOLD) {
     lowAmpFrameCount = 0; // 重置静音计数
@@ -613,26 +550,15 @@ function animate() {
             console.log("📍 Detected sentence boundary.");
             console.log(reverseCounter);
             if (isRotating) {
-              if (
-                !getReversingMidway() &&
-                reverseCounter >= params.reverseFreqLimit
-              ) {
+              if (reverseCounter >= params.reverseFreqLimit) {
                 reverseCounter = 0;
-
-                setTimeout(() => {
-                  setShouldReverseMidway(true);
-                  console.log("reversed!!!⚠️");
-                  normalDir = !normalDir;
-                  reversed = true;
-                }, 400);
+                doRotation = false;
+                setShouldReverseMidway(true);
+                faceIndex = (faceIndex + 1) % faceSequence.length;
+                doRotation = true;
+                console.log("reversed!!!⚠️");
               }
             }
-            // } else {
-            //   normalDir = !normalDir;
-            //   reversed = true;
-            //   reverseCounter = 0;
-            // }
-
             isInSilentPhase = true;
             silentFrameCount = 0;
           }

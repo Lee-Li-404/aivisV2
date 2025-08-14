@@ -7,8 +7,7 @@ import { remove } from "three/examples/jsm/libs/tween.module.js";
 import {
   getShouldReverseMidway,
   setShouldReverseMidway,
-  getReversingMidway,
-  setReversingMidway,
+  incrementReverseCounter,
 } from "./main.js"; // ✅ 路径按你实际情况调整
 
 // Axis of rotation per face
@@ -66,128 +65,29 @@ export function rotate180(
   onComplete
 ) {
   const axis = faceAxes[face];
-  const totalAngle = Math.PI;
+  let totalAngle = Math.PI;
   const groupIDs = faceGroups[face];
 
   let accumulatedAngle = 0;
   let currentDelta = 0;
 
   function animate() {
-    if (getShouldReverseMidway() && !getReversingMidway()) {
-      setReversingMidway(true);
-      console.log("🔁 Midway reverse triggered (rotate180)");
-    }
-
-    if (getReversingMidway()) {
-      const targetDelta = totalAngle / steps;
-      currentDelta = THREE.MathUtils.lerp(currentDelta, targetDelta, 0.2);
-      const appliedDelta = Math.min(currentDelta, accumulatedAngle);
-
-      for (const id of groupIDs) {
-        const group = groupArray[id];
-        group.rotateOnWorldAxis(axis.clone().negate(), appliedDelta);
-
-        const newCenter = getGroupCenter(group);
-        const newDir = newCenter.clone().sub(sceneCenter).normalize();
-        groupDirectionArray[id] = newDir;
-      }
-
-      accumulatedAngle -= appliedDelta;
-
-      if (accumulatedAngle <= 1e-5) {
+    const remaining = totalAngle - accumulatedAngle;
+    if (remaining <= 1e-5) {
+      if (getShouldReverseMidway() == false) {
+        console.log("here");
+        applyRotationGroupMapping(face);
+        incrementReverseCounter();
+        totalAngle += Math.PI;
+      } else {
+        applyRotationGroupMapping(face);
         setShouldReverseMidway(false);
-        setReversingMidway(false);
         if (onComplete) onComplete();
         return;
       }
-
-      requestAnimationFrame(animate);
-      return;
     }
 
-    const remaining = totalAngle - accumulatedAngle;
-    if (remaining <= 1e-5) {
-      applyRotationGroupMapping(face);
-      if (onComplete) onComplete();
-      return;
-    }
-
-    const targetDelta = totalAngle / steps;
-    currentDelta = THREE.MathUtils.lerp(currentDelta, targetDelta, 0.2);
-    const appliedDelta = Math.min(currentDelta, remaining);
-
-    for (const id of groupIDs) {
-      const group = groupArray[id];
-      group.rotateOnWorldAxis(axis, appliedDelta);
-
-      const newCenter = getGroupCenter(group);
-      const newDir = newCenter.clone().sub(sceneCenter).normalize();
-      groupDirectionArray[id] = newDir;
-    }
-
-    accumulatedAngle += appliedDelta;
-    requestAnimationFrame(animate);
-  }
-
-  animate();
-}
-
-export function rotate180Reverse(
-  face,
-  groupArray,
-  groupDirectionArray,
-  getGroupCenter,
-  sceneCenter,
-  onComplete
-) {
-  const axis = faceAxes[face].clone().negate(); // 初始就是反方向
-  const totalAngle = Math.PI;
-  const groupIDs = faceGroups[face];
-
-  let accumulatedAngle = 0;
-  let currentDelta = 0;
-
-  function animate() {
-    if (getShouldReverseMidway() && !getReversingMidway()) {
-      setReversingMidway(true);
-      console.log("🔁 Midway reverse triggered (rotate180Reverse)");
-    }
-
-    if (getReversingMidway()) {
-      const targetDelta = totalAngle / steps;
-      currentDelta = THREE.MathUtils.lerp(currentDelta, targetDelta, 0.2);
-      const appliedDelta = Math.min(currentDelta, accumulatedAngle);
-
-      for (const id of groupIDs) {
-        const group = groupArray[id];
-        group.rotateOnWorldAxis(axis.clone().negate(), appliedDelta); // 回正方向
-
-        const newCenter = getGroupCenter(group);
-        const newDir = newCenter.clone().sub(sceneCenter).normalize();
-        groupDirectionArray[id] = newDir;
-      }
-
-      accumulatedAngle -= appliedDelta;
-
-      if (accumulatedAngle <= 1e-5) {
-        setShouldReverseMidway(false);
-        setReversingMidway(false);
-        if (onComplete) onComplete();
-        return;
-      }
-
-      requestAnimationFrame(animate);
-      return;
-    }
-
-    const remaining = totalAngle - accumulatedAngle;
-    if (remaining <= 1e-5) {
-      applyRotationGroupMappingReverse(face);
-      if (onComplete) onComplete();
-      return;
-    }
-
-    const targetDelta = totalAngle / steps;
+    const targetDelta = Math.PI / steps;
     currentDelta = THREE.MathUtils.lerp(currentDelta, targetDelta, 0.2);
     const appliedDelta = Math.min(currentDelta, remaining);
 
