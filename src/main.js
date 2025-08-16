@@ -858,13 +858,15 @@ function handleEvent(eventId, text) {
 setInterval(pollBackendStatus, 100);
 
 const API_BASE = "https://realtimedialogue.onrender.com";
-const BLANK_PAGE = "/blank.html"; // 你想跳去的页面
+const BLANK_PAGE = "/thankyou.html"; // 你想跳去的页面
 
 (async () => {
   try {
     const res = await fetch(`${API_BASE}/availability`, { cache: "no-store" });
     const data = await res.json();
 
+    console.log(data); // ✅ 打印解析后的结果
+    console.log("here");
     if (data.occupied) {
       location.replace(BLANK_PAGE);
       return;
