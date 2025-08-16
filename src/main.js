@@ -2,7 +2,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { groupings } from "./groupings.js";
 import { gradientPresets } from "./gradients.js";
-import { rotate180, getGroupOriginalCenter, setStep } from "./rotationUtils.js";
+import {
+  rotate180,
+  getGroupOriginalCenter,
+  setStep,
+  rotate90,
+} from "./rotationUtils.js";
 import gsap from "gsap";
 import { GUI } from "dat.gui";
 
@@ -203,8 +208,97 @@ document.body.addEventListener(
 );
 
 let isPlaying = false;
-
 let nextPlayTime = globalAudioCtx.currentTime;
+
+// ★ 新增：播放期的 VAD 定时器与状态
+let playbackVadTimer = null;
+const VAD_HOP_MS = 10; // 每 10ms 判一次
+const VAD_FRAME_MS = 30; // 30ms 帧
+const VAD_SILENCE_MS = 450; // 句末需要的最小静音时长
+const VAD_START_RMS = 0.015; // 进入语音阈值（可按需要调）
+const VAD_END_RMS = 0.008; // 退出语音阈值（可按需要调）
+
+let vadInSpeech = false;
+let vadSpeechFrames = 0;
+let vadSilenceFrames = 0;
+
+function resetPlaybackVadState() {
+  vadInSpeech = false;
+  vadSpeechFrames = 0;
+  vadSilenceFrames = 0;
+}
+
+function startPlaybackVAD() {
+  if (playbackVadTimer) return;
+  resetPlaybackVadState();
+  const hop = VAD_HOP_MS;
+  const frameSamples = Math.round(
+    (globalAudioCtx.sampleRate * VAD_FRAME_MS) / 1000
+  );
+  const hopSamples = Math.round(
+    (globalAudioCtx.sampleRate * VAD_HOP_MS) / 1000
+  );
+  const needSilentFrames = Math.ceil(VAD_SILENCE_MS / VAD_HOP_MS);
+
+  // 从 analyser 抓 30ms 窗口做 RMS（简单稳定）
+  const floatBuf = new Float32Array(analyserNode.fftSize); // 你已设 256，这里足够用
+  playbackVadTimer = setInterval(() => {
+    // 如果已经没有在播，直接停
+    if (!isPlaying) {
+      stopPlaybackVAD();
+      return;
+    }
+
+    analyserNode.getFloatTimeDomainData(floatBuf);
+
+    // 计算一帧 RMS（注意：analyser 抓到的是当前输出混音，足够用于 TTS 断句）
+    let sum = 0;
+    // 用 min(frameSamples, floatBuf.length) 防止越界
+    const N = Math.min(frameSamples, floatBuf.length);
+    for (let i = 0; i < N; i++) sum += floatBuf[i] * floatBuf[i];
+    const rms = Math.sqrt(sum / N);
+
+    if (!vadInSpeech) {
+      if (rms >= VAD_START_RMS) {
+        vadSpeechFrames++;
+        if (vadSpeechFrames >= 1) {
+          // 连续一帧超阈就进入语音
+          vadInSpeech = true;
+          vadSilenceFrames = 0;
+        }
+      } else {
+        vadSpeechFrames = 0;
+      }
+    } else {
+      if (rms < VAD_END_RMS || reverseCounter >= 13) {
+        vadSilenceFrames++;
+        if (
+          (vadSilenceFrames >= needSilentFrames &&
+            vadSpeechFrames >= 200 / VAD_HOP_MS) ||
+          reverseCounter >= 13
+        ) {
+          // 至少说满 ~200ms
+          handleSentenceBoundary("realtime_playback");
+          // 重置，准备下一句
+          vadInSpeech = false;
+          vadSpeechFrames = 0;
+          vadSilenceFrames = 0;
+        }
+      } else {
+        vadSilenceFrames = 0;
+        vadSpeechFrames++;
+      }
+    }
+  }, hop);
+}
+
+function stopPlaybackVAD() {
+  if (playbackVadTimer) {
+    clearInterval(playbackVadTimer);
+    playbackVadTimer = null;
+  }
+  resetPlaybackVadState();
+}
 
 function playFromQueue() {
   if (isPlaying || playQueue.length === 0) return;
@@ -215,12 +309,27 @@ function playFromQueue() {
   source.connect(analyserNode);
   analyserNode.connect(globalAudioCtx.destination);
 
-  source.start(nextPlayTime); // 🎯 不立即播，而是排队播
+  // 避免排队时间落后于当前时间
+  const safetyLead = 0.02;
+  nextPlayTime = Math.max(
+    nextPlayTime,
+    globalAudioCtx.currentTime + safetyLead
+  );
+
+  source.start(nextPlayTime);
   nextPlayTime += buffer.duration;
 
   isPlaying = true;
+
+  // ★ 开始实时 VAD（只在播放期间运行）
+  startPlaybackVAD();
+
   source.onended = () => {
     isPlaying = false;
+    // 如果队列里还有，继续下一段；否则停掉 VAD
+    if (playQueue.length === 0) {
+      stopPlaybackVAD();
+    }
     playFromQueue();
   };
 }
@@ -324,21 +433,6 @@ let skipExpandOnce = false;
 let isRotating = false;
 let faceSequence = ["top", "right", "bottom", "left", "front", "back"];
 let faceIndex = 0;
-let reversed = false;
-
-function reorderFaceSequence(faceSequence, i) {
-  const after = faceSequence.slice(i + 1).reverse(); // 当前后的部分反转
-  const current = [faceSequence[i]];
-  const before = faceSequence.slice(0, i).reverse();
-
-  const newSequence = after.concat(current, before);
-  const newIndex = after.length;
-
-  if (newSequence[newIndex] != faceSequence[i]) {
-    console.log("warning! not equal!⚠️");
-  }
-  return { newSequence, newIndex };
-}
 
 window.addEventListener("keydown", (e) => {
   if (e.code === "KeyD") {
@@ -356,6 +450,24 @@ window.addEventListener("keydown", (e) => {
     doRotation = false;
   }
 });
+
+function handleSentenceBoundary(source = "realtime_playback") {
+  console.log(`📍 Detected sentence boundary from: ${source}`);
+  console.log("reverseCounter:", reverseCounter);
+
+  if (isRotating && params.reverseEnabled) {
+    if (reverseCounter >= params.reverseFreqLimit) {
+      reverseCounter = 0;
+      doRotation = false;
+      setShouldReverseMidway(true);
+      faceIndex = (faceIndex + 1) % faceSequence.length;
+      doRotation = true;
+      console.log("reversed!!!⚠️");
+    } else {
+      reverseCounter++;
+    }
+  }
+}
 
 let frame = 0; // 用于记录当前帧数，驱动正弦波动画节奏
 
@@ -378,7 +490,7 @@ function animate() {
     const face = faceSequence[faceIndex];
     // console.log(face);
     isRotating = true;
-    rotate180(
+    rotate90(
       face,
       groupArray,
       groupDirectionArray,
@@ -542,34 +654,34 @@ function animate() {
         sum += audioDataArray[i] * audioDataArray[i];
       }
       let currRms = Math.sqrt(sum / audioDataArray.length);
-      if (!isInSilentPhase && params.reverseEnabled) {
-        if (currRms < params.SILENT_RMS_THRESHOLD) {
-          silentFrameCount += 1;
+      // if (!isInSilentPhase && params.reverseEnabled) {
+      //   if (currRms < params.SILENT_RMS_THRESHOLD) {
+      //     silentFrameCount += 1;
 
-          if (silentFrameCount >= params.SILENT_FRAME_LIMIT) {
-            console.log("📍 Detected sentence boundary.");
-            console.log(reverseCounter);
-            if (isRotating) {
-              if (reverseCounter >= params.reverseFreqLimit) {
-                reverseCounter = 0;
-                doRotation = false;
-                setShouldReverseMidway(true);
-                faceIndex = (faceIndex + 1) % faceSequence.length;
-                doRotation = true;
-                console.log("reversed!!!⚠️");
-              }
-            }
-            isInSilentPhase = true;
-            silentFrameCount = 0;
-          }
-        } else {
-          silentFrameCount = 0;
-        }
-      } else {
-        if (currRms >= SILENT_RMS_THRESHOLD_UP) {
-          isInSilentPhase = false;
-        }
-      }
+      //     if (silentFrameCount >= params.SILENT_FRAME_LIMIT) {
+      //       console.log("📍 Detected sentence boundary.");
+      //       console.log(reverseCounter);
+      //       if (isRotating) {
+      //         if (reverseCounter >= params.reverseFreqLimit) {
+      //           reverseCounter = 0;
+      //           doRotation = false;
+      //           setShouldReverseMidway(true);
+      //           faceIndex = (faceIndex + 1) % faceSequence.length;
+      //           doRotation = true;
+      //           console.log("reversed!!!⚠️");
+      //         }
+      //       }
+      //       isInSilentPhase = true;
+      //       silentFrameCount = 0;
+      //     }
+      //   } else {
+      //     silentFrameCount = 0;
+      //   }
+      // } else {
+      //   if (currRms >= SILENT_RMS_THRESHOLD_UP) {
+      //     isInSilentPhase = false;
+      //   }
+      // }
 
       lastSmoothRms = lastSmoothRms * 0.7 + currRms * 0.3;
       norm = lastSmoothRms > NOISE_FLOOR ? lastSmoothRms / RMS_MAX : 0;
@@ -580,6 +692,9 @@ function animate() {
         targetSpeed = lastSpeed + 0.012 * Math.sign(targetSpeed - lastSpeed);
       }
       setStep(Math.max(40, Math.abs(0.31 - targetSpeed) * 700));
+      if (getShouldReverseMidway()) {
+        setStep(Math.max(40, Math.abs(0.31 - targetSpeed) * 400));
+      }
       maxAmplitude = params.maxAmp; // 💡 useRemoteRMS 时最大伸缩幅度为 9
     } else {
       targetSpeed = 0.018;
@@ -741,6 +856,26 @@ function handleEvent(eventId, text) {
 
 // 每 100ms 轮询一次
 setInterval(pollBackendStatus, 100);
+
+const API_BASE = "https://realtimedialogue.onrender.com";
+const BLANK_PAGE = "/blank.html"; // 你想跳去的页面
+
+(async () => {
+  try {
+    const res = await fetch(`${API_BASE}/availability`, { cache: "no-store" });
+    const data = await res.json();
+
+    if (data.occupied) {
+      location.replace(BLANK_PAGE);
+      return;
+    }
+  } catch (err) {
+    console.error("检查占用状态失败", err);
+  }
+
+  // 只有等上面的 await 完成后，才会执行这里
+  console.log("WebSocket 建立逻辑在这里跑");
+})();
 
 //麦克风输入
 let micStream;

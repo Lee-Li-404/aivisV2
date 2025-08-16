@@ -50,10 +50,172 @@ export function getGroupOriginalCenter(num) {
   return new THREE.Vector3(x, y, z);
 }
 
+// === 你的 pair-based CCW 规则（以该面朝你、逆时针） ===
+const pairMapCCW = {
+  top: {
+    "left,front": ["right", "front"],
+    "left,back": ["left", "front"],
+    "right,front": ["right", "back"],
+    "right,back": ["left", "back"],
+  },
+  right: {
+    "top,front": ["bottom", "front"],
+    "top,back": ["top", "front"],
+    "bottom,front": ["bottom", "back"],
+    "bottom,back": ["top", "back"],
+  },
+  bottom: {
+    "left,front": ["left", "back"],
+    "left,back": ["right", "back"],
+    "right,front": ["left", "front"],
+    "right,back": ["right", "front"],
+  },
+  left: {
+    "top,front": ["top", "back"],
+    "top,back": ["bottom", "back"],
+    "bottom,front": ["top", "front"],
+    "bottom,back": ["bottom", "front"],
+  },
+  front: {
+    "top,left": ["bottom", "left"],
+    "top,right": ["top", "left"],
+    "bottom,left": ["bottom", "right"],
+    "bottom,right": ["top", "right"],
+  },
+  back: {
+    "top,left": ["top", "right"],
+    "top,right": ["bottom", "right"],
+    "bottom,left": ["top", "left"],
+    "bottom,right": ["bottom", "left"],
+  },
+};
+
+function canonicalPairOrder(face, a, b) {
+  const axisOrder = {
+    top: { g1: new Set(["left", "right"]), g2: new Set(["front", "back"]) },
+    bottom: { g1: new Set(["left", "right"]), g2: new Set(["front", "back"]) },
+    left: { g1: new Set(["top", "bottom"]), g2: new Set(["front", "back"]) },
+    right: { g1: new Set(["top", "bottom"]), g2: new Set(["front", "back"]) },
+    front: { g1: new Set(["top", "bottom"]), g2: new Set(["left", "right"]) },
+    back: { g1: new Set(["top", "bottom"]), g2: new Set(["left", "right"]) },
+  };
+  const { g1, g2 } = axisOrder[face];
+  if (g1.has(a) && g2.has(b)) return [a, b];
+  if (g1.has(b) && g2.has(a)) return [b, a];
+  return [a, b]; // fallback
+}
+
+// 用成对规则把“该面标签以外的两项”做 CCW 置换；该面标签保持不变
+function permuteFacesCCW_byPairs(faces, face) {
+  const others = faces.filter((f) => f !== face);
+  if (others.length !== 2) return faces.slice();
+  const [p, q] = canonicalPairOrder(face, others[0], others[1]);
+  const key = `${p},${q}`;
+  const mapped = (pairMapCCW[face] || {})[key];
+  if (!mapped) return faces.slice();
+  return [face, mapped[0], mapped[1]];
+}
+
+// === 生成“当前状态下”的 90°（CCW）查表，风格与你的 180° 表一致 ===
+function buildRotationGroupingsMap90CCW(face) {
+  const map = [];
+  const ids = faceGroups[face]; // 该面的四个角块（当前状态）
+  for (const id of ids) {
+    const cube = rotationGroupings[id]; // 旧朝向
+    const next = permuteFacesCCW_byPairs(cube, face); // 新朝向
+    map.push({ rotation: face, id, cube: cube.slice(), new: next.slice() });
+  }
+  return map;
+}
+
+// === 按“查表→删旧→加新→写回”的方式应用 90°（CCW） ===
+export function applyRotationGroupMapping90(face) {
+  const rotationGroupingsMap90 = buildRotationGroupingsMap90CCW(face);
+
+  for (let i = 1; i <= 8; i++) {
+    const currentFaces = rotationGroupings[i];
+
+    for (let j = 0; j < rotationGroupingsMap90.length; j++) {
+      const mapping = rotationGroupingsMap90[j];
+
+      if (
+        mapping.rotation === face &&
+        arraysEqualIgnoreOrder(mapping.cube, currentFaces)
+      ) {
+        // 1) 从旧面组移除
+        for (let k = 0; k < 3; k++) {
+          removeValue(faceGroups[currentFaces[k]], i);
+        }
+        // 2) 加入新面组
+        for (let k = 0; k < 3; k++) {
+          addUnique(faceGroups[mapping.new[k]], i);
+        }
+        // 3) 写回当前方块的朝向
+        rotationGroupings[i] = mapping.new.slice();
+        break; // 找到匹配就结束内层循环
+      }
+    }
+  }
+}
+
 let steps = 65;
 
 export function setStep(val) {
   steps = val;
+}
+
+export function rotate90(
+  face,
+  groupArray,
+  groupDirectionArray,
+  getGroupCenter,
+  sceneCenter,
+  onComplete
+) {
+  const axis = faceAxes[face];
+  let totalAngle = Math.PI / 2; // 90°
+  const groupIDs = faceGroups[face];
+
+  let accumulatedAngle = 0;
+  let currentDelta = 0;
+
+  function animate() {
+    const remaining = totalAngle - accumulatedAngle;
+
+    if (remaining <= 1e-5) {
+      if (getShouldReverseMidway() == false) {
+        // ✅ 用 90° 的 CCW 查表映射更新状态
+        applyRotationGroupMapping90(face);
+        incrementReverseCounter();
+        totalAngle += Math.PI / 2; // 如果还要连续旋转
+      } else {
+        applyRotationGroupMapping90(face);
+        setShouldReverseMidway(false);
+        if (onComplete) onComplete();
+        return;
+      }
+    }
+
+    // 90° 分成 steps 步完成
+    const targetDelta = Math.PI / steps;
+    currentDelta = THREE.MathUtils.lerp(currentDelta, targetDelta, 0.2);
+    const appliedDelta = Math.min(currentDelta, remaining);
+
+    // 几何动画部分保持原样
+    for (const id of groupIDs) {
+      const group = groupArray[id];
+      group.rotateOnWorldAxis(axis, appliedDelta);
+
+      const newCenter = getGroupCenter(group);
+      const newDir = newCenter.clone().sub(sceneCenter).normalize();
+      groupDirectionArray[id] = newDir;
+    }
+
+    accumulatedAngle += appliedDelta;
+    requestAnimationFrame(animate);
+  }
+
+  animate();
 }
 
 export function rotate180(
