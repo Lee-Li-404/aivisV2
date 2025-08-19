@@ -55,9 +55,9 @@ const params = {
   reverseEnabled: true,
   backgroundColor: "#fff2e5", // 用字符串给 GUI 绑定
   maxAmp: 10,
-  reverseFreqLimit: 1,
-  SILENT_RMS_THRESHOLD: 0.0024,
-  SILENT_FRAME_LIMIT: 4,
+  reverseFreqLimit: 2,
+  SILENT_FRAME_NORMAL: 350,
+  SILENT_FRAME_SENSITIVE: 200,
 };
 
 const guiRotation = gui
@@ -71,10 +71,10 @@ const guiRotation = gui
   });
 
 const guiReverse = gui.add(params, "reverseEnabled").name("断句变转动方向？");
-const guiAmp = gui.add(params, "maxAmp").name("回答缩放幅度");
-gui.add(params, "reverseFreqLimit").name("反转频率（转）").step(1);
-gui.add(params, "SILENT_RMS_THRESHOLD").name("断句识别 （音量）");
-gui.add(params, "SILENT_FRAME_LIMIT").name("断句识别（时长）").step(1);
+// const guiAmp = gui.add(params, "maxAmp").name("回答缩放幅度");
+
+// gui.add(params, "SILENT_FRAME_NORMAL").name("断句识别（正常）").step(1);
+// gui.add(params, "SILENT_FRAME_SENSITIVE").name("断句识别（敏感）").step(1);
 
 // 背景颜色调色盘
 gui
@@ -83,6 +83,8 @@ gui
   .onChange((value) => {
     scene.background = new THREE.Color(value); // 每次改都生成新的 Color
   });
+
+let isRefresh = false;
 
 //加入声波RMS
 let useMicRMS = true; // 改成用麦克风输入做 RMS
@@ -94,10 +96,6 @@ let lastSpeed = 0.04; // 平滑后的speed
 let lastMotionScale = 1; // 初始幅度，设你动效一开始的缩放即可
 let phase = 0;
 
-let silentFrameCount = 0;
-const SILENT_RMS_THRESHOLD_UP = 0.01;
-let isInSilentPhase = false;
-
 // === main.js ===
 
 let shouldReverseMidway = false;
@@ -107,6 +105,12 @@ let reverseCounter = 0;
 
 export function incrementReverseCounter() {
   reverseCounter++;
+  if (reverseCounter >= 8) {
+    VAD_SILENCE_MS = params.SILENT_FRAME_SENSITIVE;
+    console.log("👻 turned into sensitive mode");
+  } else {
+    VAD_SILENCE_MS = params.SILENT_FRAME_NORMAL;
+  }
 }
 
 export function getReverseCounter() {
@@ -214,7 +218,7 @@ let nextPlayTime = globalAudioCtx.currentTime;
 let playbackVadTimer = null;
 const VAD_HOP_MS = 10; // 每 10ms 判一次
 const VAD_FRAME_MS = 30; // 30ms 帧
-const VAD_SILENCE_MS = 450; // 句末需要的最小静音时长
+let VAD_SILENCE_MS = params.SILENT_FRAME_NORMAL; // 句末需要的最小静音时长
 const VAD_START_RMS = 0.015; // 进入语音阈值（可按需要调）
 const VAD_END_RMS = 0.008; // 退出语音阈值（可按需要调）
 
@@ -238,7 +242,6 @@ function startPlaybackVAD() {
   const hopSamples = Math.round(
     (globalAudioCtx.sampleRate * VAD_HOP_MS) / 1000
   );
-  const needSilentFrames = Math.ceil(VAD_SILENCE_MS / VAD_HOP_MS);
 
   // 从 analyser 抓 30ms 窗口做 RMS（简单稳定）
   const floatBuf = new Float32Array(analyserNode.fftSize); // 你已设 256，这里足够用
@@ -257,6 +260,7 @@ function startPlaybackVAD() {
     const N = Math.min(frameSamples, floatBuf.length);
     for (let i = 0; i < N; i++) sum += floatBuf[i] * floatBuf[i];
     const rms = Math.sqrt(sum / N);
+    let needSilentFrames = Math.ceil(VAD_SILENCE_MS / VAD_HOP_MS);
 
     if (!vadInSpeech) {
       if (rms >= VAD_START_RMS) {
@@ -270,12 +274,12 @@ function startPlaybackVAD() {
         vadSpeechFrames = 0;
       }
     } else {
-      if (rms < VAD_END_RMS || reverseCounter >= 13) {
+      if (rms < VAD_END_RMS || reverseCounter >= 17) {
         vadSilenceFrames++;
         if (
           (vadSilenceFrames >= needSilentFrames &&
             vadSpeechFrames >= 200 / VAD_HOP_MS) ||
-          reverseCounter >= 13
+          reverseCounter >= 17
         ) {
           // 至少说满 ~200ms
           handleSentenceBoundary("realtime_playback");
@@ -654,34 +658,6 @@ function animate() {
         sum += audioDataArray[i] * audioDataArray[i];
       }
       let currRms = Math.sqrt(sum / audioDataArray.length);
-      // if (!isInSilentPhase && params.reverseEnabled) {
-      //   if (currRms < params.SILENT_RMS_THRESHOLD) {
-      //     silentFrameCount += 1;
-
-      //     if (silentFrameCount >= params.SILENT_FRAME_LIMIT) {
-      //       console.log("📍 Detected sentence boundary.");
-      //       console.log(reverseCounter);
-      //       if (isRotating) {
-      //         if (reverseCounter >= params.reverseFreqLimit) {
-      //           reverseCounter = 0;
-      //           doRotation = false;
-      //           setShouldReverseMidway(true);
-      //           faceIndex = (faceIndex + 1) % faceSequence.length;
-      //           doRotation = true;
-      //           console.log("reversed!!!⚠️");
-      //         }
-      //       }
-      //       isInSilentPhase = true;
-      //       silentFrameCount = 0;
-      //     }
-      //   } else {
-      //     silentFrameCount = 0;
-      //   }
-      // } else {
-      //   if (currRms >= SILENT_RMS_THRESHOLD_UP) {
-      //     isInSilentPhase = false;
-      //   }
-      // }
 
       lastSmoothRms = lastSmoothRms * 0.7 + currRms * 0.3;
       norm = lastSmoothRms > NOISE_FLOOR ? lastSmoothRms / RMS_MAX : 0;
@@ -852,6 +828,9 @@ function handleEvent(eventId, text) {
     if ("useRemoteRMS" in state) useRemoteRMS = state.useRemoteRMS;
     if ("useMicRMS" in state) useMicRMS = state.useMicRMS;
   }
+  if (eventId == 451) {
+    reverseCounter = 0;
+  }
 }
 
 // 每 100ms 轮询一次
@@ -919,6 +898,7 @@ const startBtn = document.getElementById("startBtn");
 const stopBtn = document.getElementById("stopBtn");
 
 startBtn.onclick = () => {
+  isRefresh = true;
   fetch("https://realtimedialogue.onrender.com/start", {
     method: "POST",
   }).catch((err) => console.error("❌ Start error:", err));
@@ -962,3 +942,14 @@ setTimeout(() => {
       window.location.href = "/thankyou.html"; // 或你的主页/提示页
     });
 }, 5 * 60 * 1000); // 60秒
+
+window.addEventListener("unload", () => {
+  if (!isRefresh) {
+    fetch("https://realtimedialogue.onrender.com/stop", {
+      method: "POST",
+      keepalive: true,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "close" }), // 可选
+    });
+  }
+});
