@@ -847,6 +847,7 @@ const BLANK_PAGE = "/thankyou.html"; // 你想跳去的页面
     console.log(data); // ✅ 打印解析后的结果
     console.log("here");
     if (data.occupied) {
+      isRefresh = true;
       location.replace(BLANK_PAGE);
       return;
     }
