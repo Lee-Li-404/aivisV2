@@ -2,18 +2,13 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { groupings } from "./groupings.js";
 import { gradientPresets } from "./gradients.js";
-import {
-  rotate180,
-  getGroupOriginalCenter,
-  setStep,
-  rotate90,
-} from "./rotationUtils.js";
+import { getGroupOriginalCenter, setStep, rotate90 } from "./rotationUtils.js";
 import gsap from "gsap";
 import { GUI } from "dat.gui";
 
 // === Setup scene ===
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0xfff2e5); // 你可以用任何淡橙色调，比如这个
+scene.background = new THREE.Color(0xfff2e5); // 背景颜色
 
 const camera = new THREE.PerspectiveCamera(
   75,
